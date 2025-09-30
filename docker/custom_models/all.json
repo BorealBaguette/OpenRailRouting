@@ -1,0 +1,39 @@
+{
+  "distance_influence": 0,
+  "priority": [
+    {
+      "if": "railway_class == ABANDONED || railway_class == DISUSED || railway_class == PROPOSED || railway_class == CONSTRUCTION || railway_class == RAZED",
+      "multiply_by": "0.001"
+    },
+    {
+      "else_if": "railway_service == YARD",
+      "multiply_by": "0.01"
+    },
+    {
+      "else_if": "!rail_access",
+      "multiply_by": "0"
+    },
+    {
+      "else_if": "rail_access == true",
+      "multiply_by": "1.0"
+    },
+    {
+      "else": "",
+      "multiply_by": "0.5"
+    }
+  ],
+  "speed": [
+    {
+      "if": "true",
+      "limit_to": "rail_average_speed"
+    },
+    {
+      "if": "railway_service == SIDING || railway_service == SPUR || railway_service == YARD",
+      "limit_to": "30"
+    },
+    {
+      "else_if": "max_speed > 0",
+      "limit_to": "max_speed"
+    }
+  ]
+}

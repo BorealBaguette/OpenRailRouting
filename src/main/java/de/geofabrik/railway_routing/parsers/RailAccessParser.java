@@ -29,9 +29,16 @@ public class RailAccessParser extends AbstractAccessParser {
         if (railway == null) {
             return WayAccess.CAN_SKIP;
         }
-        if (railway.equals("rail") || railway.equals("light_rail") || railway.equals("tram") || railway.equals("subway") || railway.equals("narrow_gauge")) {
+        
+        // Primary railway types
+        if (railway.equals("rail") || railway.equals("light_rail") || 
+            railway.equals("tram") || railway.equals("subway") || 
+            railway.equals("narrow_gauge") || railway.equals("ferry") || 
+            railway.equals("abandoned") || railway.equals("disused") || 
+            railway.equals("proposed") || railway.equals("construction") || 
+            railway.equals("razed")) {
             return WayAccess.WAY;
-        }
+        }        
         return WayAccess.CAN_SKIP;
     }
 

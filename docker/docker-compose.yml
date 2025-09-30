@@ -1,0 +1,14 @@
+services:
+  openrailrouting:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8989:8989"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+      - ./osm:/app/data
+      - ./graph-cache:/app/graph-cache
+      - ./custom_models:/app/custom_models:ro 
+    environment:
+      - JAVA_OPTS=-Xmx32g

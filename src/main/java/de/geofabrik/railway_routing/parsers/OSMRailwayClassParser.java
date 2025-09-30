@@ -20,6 +20,7 @@ public class OSMRailwayClassParser implements TagParser {
         String railwayClassTag = readerWay.getTag("railway");
         if (railwayClassTag == null)
             return;
+        
         RailwayClass railwayClass = RailwayClass.find(railwayClassTag);
         railwayClassEnc.setEnum(false, edgeId, edgeIntAccess, railwayClass);
     }
