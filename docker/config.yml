@@ -231,7 +231,9 @@ graphhopper:
 
   # You can limit the max distance between two consecutive waypoints of flexible routing requests to be less or equal
   # the given distance in meter. Default is set to 1000km.
-  routing.non_ch.max_waypoint_distance: 1000000
+  # NOTE: GraphHopperConfig only picks up custom keys like this one when their value is a quoted
+  # YAML string - a bare number here is silently ignored and the coded default is used instead.
+  routing.non_ch.max_waypoint_distance: "1000000"
 
   # When a route fails because a waypoint's nearest edge sits on a network component
   # disconnected from the rest of the route (e.g. an unlinked siding, yard or disused branch),
@@ -241,17 +243,21 @@ graphhopper:
   # end instead of retrying edge-by-edge within it; components larger than the cap are assumed
   # to be legitimate networks and are left alone. Tune max_attempts against worst-case request
   # latency. Defaults: 8 total retry attempts per waypoint, 2000-edge flood-fill cap.
-  # routing.snap.max_attempts: 8
-  # routing.snap.component_flood_fill_cap: 2000
+  # Remember: values must be quoted strings, see note above.
+  # routing.snap.max_attempts: "8"
+  # routing.snap.component_flood_fill_cap: "2000"
 
   # Snapping is purely nearest-edge and blind to railway_class, so e.g. a "tram" query for a point
   # right in front of a train station can snap onto the station's platform tracks instead of the
-  # tram line a few meters away. For profiles with a preferred railway_class (train -> RAIL,
-  # metro -> SUBWAY, tram -> TRAM; see RailwayHopper.java), each waypoint is nudged onto a matching
-  # edge if one exists within this many extra meters of the true nearest edge - a soft preference
-  # (falls back to the nearest edge of any category when nothing matching is close enough), not a
-  # hard requirement. Default: 100 meters.
-  # routing.snap.preference_radius: 100
+  # tram line a few meters away, or a mainline "train" query near a dense multi-line interchange
+  # can snap onto a nearby metro/subway tunnel instead of the station's own platform tracks. For
+  # profiles with a preferred railway_class (train -> RAIL, metro -> SUBWAY, tram -> TRAM; see
+  # RailwayHopper.java), each waypoint is nudged onto a matching edge if one exists within this
+  # many extra meters of the true nearest edge - a soft preference (falls back to the nearest edge
+  # of any category when nothing matching is close enough), not a hard requirement. Large
+  # multi-modal stations can have a few hundred meters between an interchange entrance and the
+  # actual platform tracks, hence the higher-than-you'd-guess default.
+  routing.snap.preference_radius: "300"
 
 
   #### Storage ####
