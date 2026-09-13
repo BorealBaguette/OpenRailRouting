@@ -1,5 +1,6 @@
 services:
   openrailrouting:
+    container_name: "train_routing_gh"
     build:
       context: ..
       dockerfile: docker/Dockerfile
