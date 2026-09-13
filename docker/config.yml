@@ -127,7 +127,11 @@ graphhopper:
   #           hazmat,hazmat_tunnel,hazmat_water,lanes,osm_way_id,toll,track_type,mtb_rating,hike_rating,horse_rating,
   #           country,curvature,average_slope,max_slope,car_temporal_access,bike_temporal_access,foot_temporal_access
   # For railway routing, the encoded values rail_access and rail_average_speed must be mentioned.
-  graph.encoded_values: gauge,voltage,electrified,frequency,road_environment,max_speed,rail_access,rail_average_speed,railway_class,railway_service,preferred_direction
+  # rail_average_speed defaults to speed_bits=5/speed_factor=5 (max representable ~155 km/h),
+  # which silently truncates the average-speed estimate for LGV/high-speed lines (up to 320 km/h)
+  # even though the real OSM maxspeed tag is read correctly - the encoded value just can't store
+  # the result. Widened here to speed_bits=8/speed_factor=2 (~510 km/h max, 2 km/h precision).
+  graph.encoded_values: gauge,voltage,electrified,frequency,road_environment,max_speed,rail_access,rail_average_speed|speed_bits=8|speed_factor=2,railway_class,railway_service,preferred_direction
 
   #### Speed, hybrid and flexible mode ####
 

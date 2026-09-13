@@ -46,10 +46,6 @@
     {
       "if": "railway_service == SIDING || railway_service == SPUR || railway_service == YARD",
       "limit_to": "30"
-    },
-    {
-      "else_if": "max_speed > 0",
-      "limit_to": "max_speed"
     }
   ]
 }
