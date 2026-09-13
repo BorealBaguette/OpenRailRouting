@@ -230,6 +230,12 @@ public class RailwayRoutingBundle implements ConfiguredBundle<RailwayRoutingServ
         hopper.getRouterConfig().setNonChMaxWaypointDistance(Integer.parseInt(configuration.getString(
                 Parameters.NON_CH.MAX_NON_CH_POINT_DISTANCE, "4000000")
         ));
+        hopper.setMaxSnapAttempts(Integer.parseInt(configuration.getString(
+                "routing.snap.max_attempts", "8")
+        ));
+        hopper.setComponentFloodFillCap(Integer.parseInt(configuration.getString(
+                "routing.snap.component_flood_fill_cap", "2000")
+        ));
         environment.lifecycle().manage(graphHopperManaged);
         environment.jersey().register(new AbstractBinder() {
             @Override

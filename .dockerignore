@@ -1,0 +1,10 @@
+# Runtime data, bind-mounted by docker-compose.yml — never needed in the build context/image.
+docker/osm/
+docker/graph-cache/
+
+# Build artifacts / VCS / editor cruft
+target/
+.git/
+.vscode/
+.idea/
+*.iml
