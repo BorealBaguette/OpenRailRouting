@@ -236,6 +236,9 @@ public class RailwayRoutingBundle implements ConfiguredBundle<RailwayRoutingServ
         hopper.setComponentFloodFillCap(Integer.parseInt(configuration.getString(
                 "routing.snap.component_flood_fill_cap", "2000")
         ));
+        hopper.setSnapPreferenceRadius(Double.parseDouble(configuration.getString(
+                "routing.snap.preference_radius", "100")
+        ));
         environment.lifecycle().manage(graphHopperManaged);
         environment.jersey().register(new AbstractBinder() {
             @Override

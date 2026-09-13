@@ -72,6 +72,24 @@ graphhopper:
         # Reversing costs 3 minutes.
         u_turn_costs: 180
       custom_model_files: [all.json, preferred_direction.json]
+    # Favour their named railway_class over others without hard-excluding them: OSM typing is
+    # blurry at the edges (tram-train, Wuppertal's railway=monorail Schwebebahn, etc.), so these
+    # softly discourage rather than forbid categories other than their own. See custom_models/.
+    - name: train
+      turn_costs:
+        vehicle_types: [train, tram, light_rail, subway]
+        u_turn_costs: 180
+      custom_model_files: [train.json, preferred_direction.json]
+    - name: metro
+      turn_costs:
+        vehicle_types: [train, tram, light_rail, subway]
+        u_turn_costs: 180
+      custom_model_files: [metro.json, preferred_direction.json]
+    - name: tram
+      turn_costs:
+        vehicle_types: [train, tram, light_rail, subway]
+        u_turn_costs: 180
+      custom_model_files: [tram.json, preferred_direction.json]
 
   # instead of the inbuilt custom models (see ./src/main/resources/com/graphhopper/custom_models)
   # you can specify a folder where to find your own custom model files
@@ -85,6 +103,9 @@ graphhopper:
   # usage) and the routing will also be slower than with `turn_costs: false`.
   profiles_ch:
     - profile: all
+    - profile: train
+    - profile: metro
+    - profile: tram
 
   # Hybrid mode:
   # Similar to speed mode, the hybrid mode (Landmarks, LM) also speeds up routing by doing calculating auxiliary data
@@ -222,6 +243,15 @@ graphhopper:
   # latency. Defaults: 8 total retry attempts per waypoint, 2000-edge flood-fill cap.
   # routing.snap.max_attempts: 8
   # routing.snap.component_flood_fill_cap: 2000
+
+  # Snapping is purely nearest-edge and blind to railway_class, so e.g. a "tram" query for a point
+  # right in front of a train station can snap onto the station's platform tracks instead of the
+  # tram line a few meters away. For profiles with a preferred railway_class (train -> RAIL,
+  # metro -> SUBWAY, tram -> TRAM; see RailwayHopper.java), each waypoint is nudged onto a matching
+  # edge if one exists within this many extra meters of the true nearest edge - a soft preference
+  # (falls back to the nearest edge of any category when nothing matching is close enough), not a
+  # hard requirement. Default: 100 meters.
+  # routing.snap.preference_radius: 100
 
 
   #### Storage ####
