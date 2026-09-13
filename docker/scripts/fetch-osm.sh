@@ -5,8 +5,12 @@
 #   fetch-osm.sh dev    # single small region, fast iteration (default: europe/france)
 #   fetch-osm.sh prod   # every region in regions.wanted, merged (default: worldwide)
 #
-# Requires `wget` and `osmium` (osmium-tool) on the host. Output always lands
-# at docker/osm/filtered_train.osm.pbf, matching config.yml's datareader.file.
+# Requires `wget` and `osmium` (osmium-tool) on the host. Output defaults to
+# docker/osm/filtered_train.osm.pbf (matching config.yml's datareader.file) but can be
+# redirected with OUTPUT=/some/other/path.osm.pbf - e.g. to stage a reimport into a
+# separate directory without touching the live service's data (see reimport-staged.sh).
+# Downloaded/filtered per-region files are always cached under docker/osm/ regardless of
+# OUTPUT, so staging doesn't re-download or re-filter data that's already up to date.
 set -euo pipefail
 
 MODE="${1:-}"
@@ -15,7 +19,7 @@ DOCKER_DIR="$(dirname "$SCRIPT_DIR")"
 OSM_DIR="$DOCKER_DIR/osm"
 WORLD_DIR="$OSM_DIR/world"
 FILTERED_DIR="$OSM_DIR/filtered"
-OUTPUT="$OSM_DIR/filtered_train.osm.pbf"
+OUTPUT="${OUTPUT:-$OSM_DIR/filtered_train.osm.pbf}"
 
 for cmd in wget osmium; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -23,6 +27,8 @@ for cmd in wget osmium; do
         exit 1
     fi
 done
+
+mkdir -p "$(dirname "$OUTPUT")"
 
 download_region() {
     local region="$1"

@@ -30,6 +30,24 @@ Docker, before the data is mounted into the container).
 `DEV_REGION=europe/belgium make dev-refresh`. `make prod`/`make prod-refresh` download every
 region listed in `docker/regions.wanted` (worldwide by default).
 
+### Zero-downtime reimport (production)
+
+`make refresh`/`make dev-refresh`/`make prod-refresh` all stop the service before reimporting,
+so it's offline for the whole reimport (which can take a long time on the worldwide dataset).
+For a running deployment, reimport into a separate staging directory instead, while the live
+service keeps serving throughout, then do a brief (seconds, not minutes) cutover:
+
+```bash
+make build          # rebuild the image only - never touches the running container
+make stage-prod      # fetch + reimport into docker/osm-staging/, live service unaffected
+                      # (or 'make stage' to reimport existing data without refetching,
+                      # or 'make stage-dev' for the dev extract)
+make promote-staged  # swap the staged graph into place - the actual (brief) cutover
+```
+
+The previous graph is kept at `docker/osm/filtered_train.osm-gh.old` after promoting, for
+manual rollback, until you remove it yourself once you're happy with the new one.
+
 ### Manual / custom extracts
 
 If you'd rather provide your own filtered `.osm.pbf` (e.g. a custom bounding box):
