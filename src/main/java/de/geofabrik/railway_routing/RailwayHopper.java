@@ -30,11 +30,14 @@ import de.geofabrik.railway_routing.reader.RailwayOSMParsers;
 
 public class RailwayHopper extends GraphHopper {
 
-    /** Which railway_class a profile should prefer to snap onto, when reasonably close by. */
-    private static final Map<String, RailwayClass> PREFERRED_CLASS_BY_PROFILE = Map.of(
-            "train", RailwayClass.RAIL,
-            "metro", RailwayClass.SUBWAY,
-            "tram", RailwayClass.TRAM
+    /**
+     * Which railway_class a profile should prefer to snap onto, when reasonably close by. Light
+     * rail is how many tram systems are tagged, such as Bergen's Bybanen.
+     */
+    private static final Map<String, Set<RailwayClass>> PREFERRED_CLASSES_BY_PROFILE = Map.of(
+            "train", Set.of(RailwayClass.RAIL),
+            "metro", Set.of(RailwayClass.SUBWAY),
+            "tram", Set.of(RailwayClass.TRAM, RailwayClass.LIGHT_RAIL)
     );
 
     /** Upper bound on the number of retry routing calls per waypoint, to cap worst-case latency. */
@@ -96,7 +99,7 @@ public class RailwayHopper extends GraphHopper {
     }
 
     private GHRequest preferCategorySnaps(GHRequest request) {
-        RailwayClass preferred = PREFERRED_CLASS_BY_PROFILE.get(request.getProfile());
+        Set<RailwayClass> preferred = PREFERRED_CLASSES_BY_PROFILE.get(request.getProfile());
         if (preferred == null || request.getPoints().isEmpty()) {
             return request;
         }
@@ -120,10 +123,10 @@ public class RailwayHopper extends GraphHopper {
         for (int i = 0; i < points.size(); i++) {
             GHPoint point = points.get(i);
             Snap nearest = locationIndex.findClosest(point.getLat(), point.getLon(), snapFilter);
-            if (!nearest.isValid() || nearest.getClosestEdge().get(railwayClassEnc) == preferred) {
+            if (!nearest.isValid() || preferred.contains(nearest.getClosestEdge().get(railwayClassEnc))) {
                 continue;
             }
-            EdgeFilter preferredFilter = edge -> snapFilter.accept(edge) && edge.get(railwayClassEnc) == preferred;
+            EdgeFilter preferredFilter = edge -> snapFilter.accept(edge) && preferred.contains(edge.get(railwayClassEnc));
             Snap preferredSnap = locationIndex.findClosest(point.getLat(), point.getLon(), preferredFilter);
             if (preferredSnap.isValid() && preferredSnap.getQueryDistance() <= nearest.getQueryDistance() + snapPreferenceRadius) {
                 adjustedPoints.set(i, preferredSnap.getSnappedPoint());

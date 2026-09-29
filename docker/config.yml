@@ -255,7 +255,7 @@ graphhopper:
   # right in front of a train station can snap onto the station's platform tracks instead of the
   # tram line a few meters away, or a mainline "train" query near a dense multi-line interchange
   # can snap onto a nearby metro/subway tunnel instead of the station's own platform tracks. For
-  # profiles with a preferred railway_class (train -> RAIL, metro -> SUBWAY, tram -> TRAM; see
+  # profiles with preferred railway_classes (train -> RAIL, metro -> SUBWAY, tram -> TRAM/LIGHT_RAIL; see
   # RailwayHopper.java), each waypoint is nudged onto a matching edge if one exists within this
   # many extra meters of the true nearest edge - a soft preference (falls back to the nearest edge
   # of any category when nothing matching is close enough), not a hard requirement. Large
