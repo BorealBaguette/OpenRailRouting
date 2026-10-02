@@ -292,21 +292,27 @@ public class RailwayHopper extends GraphHopper {
             return candidates;
         }
         double tolerance = softTolerance(raw, anchorSnap, ctx);
-        List<GHPoint> found = new ArrayList<>();
+        List<TrackPoint> found = new ArrayList<>();
         if (i > 0 && i < anchors.size() - 1) {
             // where the route between its neighbours already passes, if that's close enough
             GHResponse direct = super.route(scoringRequest(ctx.request, Arrays.asList(anchors.get(i - 1), anchors.get(i + 1)), true));
             if (!direct.hasErrors()) {
                 GHPoint onRoute = closestPointOnPath(raw, direct.getBest().getPoints());
                 if (onRoute != null && distance(raw, onRoute) <= tolerance) {
-                    found.add(onRoute);
+                    Snap onRouteSnap = ctx.locationIndex.findClosest(onRoute.getLat(), onRoute.getLon(), ctx.snapFilter);
+                    if (onRouteSnap.isValid()) {
+                        found.add(TrackPoint.of(onRoute, onRouteSnap));
+                    }
                 }
             }
         }
         found.addAll(nearbyRunningTracks(raw, tolerance, ctx));
-        for (GHPoint point : found) {
-            if (candidates.stream().noneMatch(c -> distance(c, point) < DUPLICATE_SNAP_DISTANCE)) {
-                candidates.add(point);
+        List<TrackPoint> kept = new ArrayList<>();
+        kept.add(TrackPoint.of(anchorSnap.getSnappedPoint(), anchorSnap));
+        for (TrackPoint candidate : found) {
+            if (kept.stream().noneMatch(k -> k.sameSpot(candidate))) {
+                kept.add(candidate);
+                candidates.add(candidate.point);
             }
         }
         return candidates;
@@ -343,7 +349,7 @@ public class RailwayHopper extends GraphHopper {
      * a neighbouring edge comes closer, is the same track further along - not an alternative.
      * Left in, it would let an endpoint slide along its own track towards the rest of the trip.
      */
-    private List<GHPoint> nearbyRunningTracks(GHPoint point, double maxDistance, SoftContext ctx) {
+    private List<TrackPoint> nearbyRunningTracks(GHPoint point, double maxDistance, SoftContext ctx) {
         double latDelta = maxDistance / DistanceCalcEarth.METERS_PER_DEGREE;
         double lonDelta = latDelta / Math.cos(Math.toRadians(point.getLat()));
         BBox box = new BBox(point.getLon() - lonDelta, point.getLon() + lonDelta,
@@ -371,8 +377,8 @@ public class RailwayHopper extends GraphHopper {
                     && closest.getLon() == geometry.getLon(geometry.size() - 1)) {
                 endNode = edge.getAdjNode();
             }
-            found.add(new TrackPoint(closest, distance(point, closest), edge.getBaseNode(), edge.getAdjNode(), endNode,
-                    ctx.preferredClass.accept(edge)));
+            found.add(new TrackPoint(closest, distance(point, closest), edgeId, edge.getBaseNode(), edge.getAdjNode(),
+                    endNode, ctx.preferredClass.accept(edge)));
         });
         found.removeIf(candidate -> candidate.endNode >= 0 && found.stream().anyMatch(other -> other != candidate
                 && (other.baseNode == candidate.endNode || other.adjNode == candidate.endNode)
@@ -381,13 +387,13 @@ public class RailwayHopper extends GraphHopper {
         // belong to other lines (Paris Étoile: RER A and Métro 2 come before Métro 6)
         found.sort(Comparator.comparing((TrackPoint candidate) -> !candidate.preferred)
                 .thenComparingDouble(candidate -> candidate.distance));
-        List<GHPoint> distinct = new ArrayList<>();
+        List<TrackPoint> distinct = new ArrayList<>();
         for (TrackPoint candidate : found) {
             if (distinct.size() >= MAX_SOFT_TRACK_CANDIDATES) {
                 break;
             }
-            if (distinct.stream().noneMatch(c -> distance(c, candidate.point) < DUPLICATE_SNAP_DISTANCE)) {
-                distinct.add(candidate.point);
+            if (distinct.stream().noneMatch(c -> c.sameSpot(candidate))) {
+                distinct.add(candidate);
             }
         }
         return distinct;
@@ -396,19 +402,37 @@ public class RailwayHopper extends GraphHopper {
     private static class TrackPoint {
         final GHPoint point;
         final double distance;
+        final int edge;
         final int baseNode;
         final int adjNode;
         /** The edge end node the closest point sits on, or -1 if it's inside the edge. */
         final int endNode;
         final boolean preferred;
 
-        TrackPoint(GHPoint point, double distance, int baseNode, int adjNode, int endNode, boolean preferred) {
+        TrackPoint(GHPoint point, double distance, int edge, int baseNode, int adjNode, int endNode, boolean preferred) {
             this.point = point;
             this.distance = distance;
+            this.edge = edge;
             this.baseNode = baseNode;
             this.adjNode = adjNode;
             this.endNode = endNode;
             this.preferred = preferred;
+        }
+
+        static TrackPoint of(GHPoint point, Snap snap) {
+            EdgeIteratorState edge = snap.getClosestEdge();
+            return new TrackPoint(point, 0, edge.getEdge(), edge.getBaseNode(), edge.getAdjNode(), -1, false);
+        }
+
+        /**
+         * The same spot on the same track: close together on one edge or on two edges that meet.
+         * Distance alone isn't enough - lines stacked at different depths (Paris Opéra: Métro 3, 7
+         * and 8 within 2 m of each other) are separate tracks and must all stay candidates.
+         */
+        boolean sameSpot(TrackPoint other) {
+            boolean connected = edge == other.edge || baseNode == other.baseNode || baseNode == other.adjNode
+                    || adjNode == other.baseNode || adjNode == other.adjNode;
+            return connected && distance(point, other.point) < DUPLICATE_SNAP_DISTANCE;
         }
     }
 
