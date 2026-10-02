@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -14,8 +15,6 @@ import java.util.Set;
 import com.graphhopper.GHRequest;
 import com.graphhopper.GHResponse;
 import com.graphhopper.GraphHopper;
-import com.graphhopper.ResponsePath;
-import com.graphhopper.config.Profile;
 import com.graphhopper.routing.Router;
 import com.graphhopper.routing.Router.Solver;
 import com.graphhopper.routing.ev.EnumEncodedValue;
@@ -73,8 +72,6 @@ public class RailwayHopper extends GraphHopper {
     public static final String WAYPOINT_MODES_HINT = "waypoint_modes";
     private static final int MAX_SOFT_TRACK_CANDIDATES = 6;
     private static final double DUPLICATE_SNAP_DISTANCE = 2.0;
-    private static final double SOFT_WEIGHT_TOLERANCE = 1e-3;
-    private static final int SOFT_RESOLUTION_PASSES = 2;
 
     enum WaypointMode {
         /** Snap exactly to the nearest edge; never nudged, moved or substituted. */
@@ -119,10 +116,10 @@ public class RailwayHopper extends GraphHopper {
      * component is small (a dead-end siding/spur/stub) are skipped in favour of the next-nearest
      * one, since snapping onto a dead end forces a there-and-back detour instead of a real route.
      * <p>
-     * 2. Soft waypoints are then resolved in order (see resolveSoftWaypoints): one the natural
-     * route already passes close by is moved onto that route, so it never causes a detour or a
-     * backtrack; otherwise the cheapest nearby track to route through is chosen, which lets the
-     * preferred_direction penalty pick the correct track of a double-track line.
+     * 2. Soft waypoints are then placed together (see resolveSoftWaypoints): each on one of a few
+     * nearby tracks, choosing the combination that makes the cheapest route overall, so an
+     * imprecise or wrong-track point never causes a detour or a reversal when a direct route
+     * exists.
      * <p>
      * 3. If the (possibly nudged) request still fails because a waypoint's edge belongs to a
      * component disconnected from the rest of the route (e.g. a branch line not joined to the
@@ -179,22 +176,18 @@ public class RailwayHopper extends GraphHopper {
     }
 
     /**
-     * Resolves soft waypoints in route order, in up to SOFT_RESOLUTION_PASSES passes (later passes
-     * see every neighbour already placed). For each one:
+     * Places all soft waypoints together. Each soft waypoint gets a few candidate positions: its
+     * current (category-nudged) snap, the closest point on the route between its neighbours, and
+     * the distinct running tracks near the pin. Each hard waypoint has only its own position. The
+     * chosen positions are the cheapest chain of legs through one candidate per waypoint, found
+     * with a Viterbi pass over the candidates.
      * <p>
-     * - Intermediate waypoint the direct route previous->next already passes within (distance to
-     *   the nearest running track + softWaypointRadius), without reversing at a waypoint: moved
-     *   onto that route. This keeps imprecise stop coordinates (e.g. imported from MOTIS) from
-     *   dragging the route off its line or making it reverse back towards the point.
-     * <p>
-     * - Otherwise: the cheapest of that on-route point (if close enough) and the distinct tracks
-     *   near its snap. Wrong-direction running and dead ends cost weight, and so do reversals at
-     *   waypoints, which GraphHopper itself doesn't charge for (see windowWeight). The current
-     *   placement is kept unless another is strictly cheaper.
-     * <p>
-     * Every route here also includes the points beyond the neighbours, which fix the direction
-     * the train arrives at the previous point and leaves the next one. Without them the previous
-     * point would count as a fresh departure that may leave in either direction.
+     * Choosing them together matters where tracks carry no railway:preferred_direction (Paris
+     * Metro, Bybanen): both tracks of a line look equally good from any one stop, so deciding stop
+     * by stop leaves mixed choices whose track changes need a detour or a reversal. A chain keeps
+     * consecutive stops on tracks that connect directly. Imprecise stops (e.g. MOTIS coordinates)
+     * likewise end up on whichever nearby track the route runs along anyway, and a soft endpoint
+     * on whichever of several lines at a station is cheapest to reach.
      */
     private GHRequest resolveSoftWaypoints(List<GHPoint> rawPoints, GHRequest request, List<WaypointMode> modes) {
         List<GHPoint> anchors = request.getPoints();
@@ -204,36 +197,61 @@ public class RailwayHopper extends GraphHopper {
         Router router = createRouter();
         Solver solver = router.createSolver(request);
         solver.init();
-        SoftContext context = new SoftContext(request, solver.createSnapFilter(), getLocationIndex(),
-                reversalWeight(request.getProfile()));
+        SoftContext ctx = new SoftContext(request, solver.createSnapFilter(), getLocationIndex());
+
+        int count = anchors.size();
+        List<List<GHPoint>> candidates = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            candidates.add(modes.get(i) == WaypointMode.SOFT
+                    ? softCandidates(i, rawPoints.get(i), anchors, ctx)
+                    : Collections.singletonList(anchors.get(i)));
+        }
+
+        // cost[c]: cheapest chain from the first waypoint to candidate c of the current one
+        double[] cost = new double[candidates.get(0).size()];
+        int[][] cameFrom = new int[count][];
+        for (int i = 1; i < count; i++) {
+            List<GHPoint> from = candidates.get(i - 1);
+            List<GHPoint> to = candidates.get(i);
+            double[] next = new double[to.size()];
+            int[] choice = new int[to.size()];
+            for (int b = 0; b < to.size(); b++) {
+                next[b] = Double.POSITIVE_INFINITY;
+                for (int a = 0; a < from.size(); a++) {
+                    if (cost[a] == Double.POSITIVE_INFINITY) {
+                        continue;
+                    }
+                    double total = cost[a] + legWeight(ctx, from.get(a), to.get(b));
+                    // strictly cheaper only: ties keep the earlier candidate, i.e. the current snap
+                    if (total < next[b]) {
+                        next[b] = total;
+                        choice[b] = a;
+                    }
+                }
+            }
+            cost = next;
+            cameFrom[i] = choice;
+        }
+        int pick = 0;
+        for (int c = 1; c < cost.length; c++) {
+            if (cost[c] < cost[pick]) {
+                pick = c;
+            }
+        }
+        if (cost[pick] == Double.POSITIVE_INFINITY) {
+            // nothing connects; leave it to the normal routing and its alternate-snap retries
+            return request;
+        }
 
         List<GHPoint> resolved = new ArrayList<>(anchors);
         Set<Integer> changed = new HashSet<>();
-        // a point only needs another look once something within two places of it has moved
-        Set<Integer> stale = new HashSet<>();
-        for (int i = 0; i < resolved.size(); i++) {
-            if (modes.get(i) == WaypointMode.SOFT) {
-                stale.add(i);
+        for (int i = count - 1; i >= 0; i--) {
+            if (pick != 0) {
+                resolved.set(i, candidates.get(i).get(pick));
+                changed.add(i);
             }
-        }
-        for (int pass = 0; pass < SOFT_RESOLUTION_PASSES && !stale.isEmpty(); pass++) {
-            Set<Integer> current = stale;
-            stale = new HashSet<>();
-            for (int i = 0; i < resolved.size(); i++) {
-                if (!current.contains(i)) {
-                    continue;
-                }
-                stale.remove(i);
-                GHPoint placement = resolveSoftWaypoint(i, rawPoints.get(i), anchors.get(i), resolved, context);
-                if (!samePoint(placement, resolved.get(i))) {
-                    resolved.set(i, placement);
-                    changed.add(i);
-                    for (int k = Math.max(0, i - 2); k <= Math.min(resolved.size() - 1, i + 2); k++) {
-                        if (k != i && modes.get(k) == WaypointMode.SOFT) {
-                            stale.add(k);
-                        }
-                    }
-                }
+            if (i > 0) {
+                pick = cameFrom[i][pick];
             }
         }
         return changed.isEmpty() ? request : copyRequest(request, resolved, changed);
@@ -243,69 +261,55 @@ public class RailwayHopper extends GraphHopper {
         final GHRequest request;
         final EdgeFilter snapFilter;
         final EdgeFilter runningTrackFilter;
+        /** The profile's own railway classes, ranked first among candidate tracks; never null. */
+        final EdgeFilter preferredClass;
         final LocationIndex locationIndex;
-        final double reversalWeight;
+        final Map<List<GHPoint>, Double> legWeights = new HashMap<>();
 
-        SoftContext(GHRequest request, EdgeFilter snapFilter, LocationIndex locationIndex, double reversalWeight) {
+        SoftContext(GHRequest request, EdgeFilter snapFilter, LocationIndex locationIndex) {
             this.request = request;
             this.snapFilter = snapFilter;
             this.runningTrackFilter = runningTrackFilter(snapFilter);
+            Set<RailwayClass> preferred = PREFERRED_CLASSES_BY_PROFILE.get(request.getProfile());
+            if (preferred == null || !getEncodingManager().hasEncodedValue(RailwayClass.KEY)) {
+                this.preferredClass = edge -> false;
+            } else {
+                EnumEncodedValue<RailwayClass> railwayClassEnc =
+                        getEncodingManager().getEnumEncodedValue(RailwayClass.KEY, RailwayClass.class);
+                this.preferredClass = edge -> preferred.contains(edge.get(railwayClassEnc));
+            }
             this.locationIndex = locationIndex;
-            this.reversalWeight = reversalWeight;
         }
     }
 
-    /** Returns the placement for soft waypoint i; resolved.get(i) if nothing beats it. */
-    private GHPoint resolveSoftWaypoint(int i, GHPoint raw, GHPoint anchor, List<GHPoint> resolved, SoftContext ctx) {
-        GHPoint current = resolved.get(i);
+    /** Candidate positions for soft waypoint i; the first is its current snap, kept on ties. */
+    private List<GHPoint> softCandidates(int i, GHPoint raw, List<GHPoint> anchors, SoftContext ctx) {
+        GHPoint anchor = anchors.get(i);
+        List<GHPoint> candidates = new ArrayList<>();
+        candidates.add(anchor);
         Snap anchorSnap = ctx.locationIndex.findClosest(anchor.getLat(), anchor.getLon(), ctx.snapFilter);
         if (!anchorSnap.isValid()) {
-            return current;
+            return candidates;
         }
-        int last = resolved.size() - 1;
-        GHPoint before = i > 1 ? resolved.get(i - 2) : null;
-        GHPoint prev = i > 0 ? resolved.get(i - 1) : null;
-        GHPoint next = i < last ? resolved.get(i + 1) : null;
-        GHPoint after = i + 2 <= last ? resolved.get(i + 2) : null;
-
         double tolerance = softTolerance(raw, anchorSnap, ctx);
-        List<GHPoint> candidates = new ArrayList<>();
-        candidates.add(current);
-        if (prev != null && next != null) {
-            GHResponse direct = super.route(scoringRequest(ctx.request, withContext(before, Arrays.asList(prev, next), after)));
+        List<GHPoint> found = new ArrayList<>();
+        if (i > 0 && i < anchors.size() - 1) {
+            // where the route between its neighbours already passes, if that's close enough
+            GHResponse direct = super.route(scoringRequest(ctx.request, Arrays.asList(anchors.get(i - 1), anchors.get(i + 1)), true));
             if (!direct.hasErrors()) {
-                ResponsePath path = direct.getBest();
-                int prevIndex = before != null ? 1 : 0;
-                List<Integer> indices = path.getWaypointIndices();
-                GHPoint onRoute = closestPointOnPath(raw,
-                        path.getPoints().copy(indices.get(prevIndex), indices.get(prevIndex + 1) + 1));
+                GHPoint onRoute = closestPointOnPath(raw, direct.getBest().getPoints());
                 if (onRoute != null && distance(raw, onRoute) <= tolerance) {
-                    if (reversalsAtWaypoints(path) == 0) {
-                        return onRoute;
-                    }
-                    candidates.add(onRoute);
+                    found.add(onRoute);
                 }
             }
         }
-        for (GHPoint point : nearbyRunningTracks(raw, tolerance, ctx)) {
+        found.addAll(nearbyRunningTracks(raw, tolerance, ctx));
+        for (GHPoint point : found) {
             if (candidates.stream().noneMatch(c -> distance(c, point) < DUPLICATE_SNAP_DISTANCE)) {
                 candidates.add(point);
             }
         }
-        if (candidates.size() < 2) {
-            return current;
-        }
-
-        GHPoint best = current;
-        double bestWeight = windowWeight(ctx, withContext(before, core(prev, current, next), after));
-        for (GHPoint candidate : candidates.subList(1, candidates.size())) {
-            double weight = windowWeight(ctx, withContext(before, core(prev, candidate, next), after));
-            if (weight < bestWeight * (1 - SOFT_WEIGHT_TOLERANCE)) {
-                bestWeight = weight;
-                best = candidate;
-            }
-        }
-        return best;
+        return candidates;
     }
 
     /** Distance to the nearest running track (not a yard or siding: a point beside a yard is still
@@ -330,7 +334,8 @@ public class RailwayHopper extends GraphHopper {
 
     /**
      * The closest point of every running track (not a siding, yard or spur) within maxDistance of
-     * the point, nearest first, one per spot, at most MAX_SOFT_TRACK_CANDIDATES. Centred on the
+     * the point, the profile's own railway classes first, then nearest first, one per spot, at most
+     * MAX_SOFT_TRACK_CANDIDATES. Centred on the
      * point itself rather than on its snap: a station node often sits between the lines it
      * serves, and from the snap on one of them, its own sidings come before the other line.
      * <p>
@@ -366,12 +371,16 @@ public class RailwayHopper extends GraphHopper {
                     && closest.getLon() == geometry.getLon(geometry.size() - 1)) {
                 endNode = edge.getAdjNode();
             }
-            found.add(new TrackPoint(closest, distance(point, closest), edge.getBaseNode(), edge.getAdjNode(), endNode));
+            found.add(new TrackPoint(closest, distance(point, closest), edge.getBaseNode(), edge.getAdjNode(), endNode,
+                    ctx.preferredClass.accept(edge)));
         });
         found.removeIf(candidate -> candidate.endNode >= 0 && found.stream().anyMatch(other -> other != candidate
                 && (other.baseNode == candidate.endNode || other.adjNode == candidate.endNode)
                 && other.distance < candidate.distance));
-        found.sort(Comparator.comparingDouble(candidate -> candidate.distance));
+        // the profile's own kind of track first: at a big interchange the nearest tracks often
+        // belong to other lines (Paris Étoile: RER A and Métro 2 come before Métro 6)
+        found.sort(Comparator.comparing((TrackPoint candidate) -> !candidate.preferred)
+                .thenComparingDouble(candidate -> candidate.distance));
         List<GHPoint> distinct = new ArrayList<>();
         for (TrackPoint candidate : found) {
             if (distinct.size() >= MAX_SOFT_TRACK_CANDIDATES) {
@@ -391,100 +400,40 @@ public class RailwayHopper extends GraphHopper {
         final int adjNode;
         /** The edge end node the closest point sits on, or -1 if it's inside the edge. */
         final int endNode;
+        final boolean preferred;
 
-        TrackPoint(GHPoint point, double distance, int baseNode, int adjNode, int endNode) {
+        TrackPoint(GHPoint point, double distance, int baseNode, int adjNode, int endNode, boolean preferred) {
             this.point = point;
             this.distance = distance;
             this.baseNode = baseNode;
             this.adjNode = adjNode;
             this.endNode = endNode;
+            this.preferred = preferred;
         }
     }
 
-    /**
-     * Route weight through the points, plus reversalWeight per reversal at an intermediate point.
-     * GraphHopper routes each leg independently, so turning back at a waypoint is free there; left
-     * uncharged, a placement that forces the train to reverse at a stop would look as cheap as one
-     * it simply runs through.
-     */
-    private double windowWeight(SoftContext ctx, List<GHPoint> points) {
-        GHResponse response = super.route(scoringRequest(ctx.request, points));
-        if (response.hasErrors()) {
-            return Double.POSITIVE_INFINITY;
-        }
-        int reversals = reversalsAtWaypoints(response.getBest());
-        return response.getBest().getRouteWeight() + (reversals == 0 ? 0 : reversals * ctx.reversalWeight);
+    private double legWeight(SoftContext ctx, GHPoint from, GHPoint to) {
+        return ctx.legWeights.computeIfAbsent(Arrays.asList(from, to), leg -> {
+            GHResponse response = super.route(scoringRequest(ctx.request, leg, false));
+            return response.hasErrors() ? Double.POSITIVE_INFINITY : response.getBest().getRouteWeight();
+        });
     }
 
-    /** Intermediate waypoints where the route leaves back the way it came (geometry A, waypoint, A). */
-    private static int reversalsAtWaypoints(ResponsePath path) {
-        PointList points = path.getPoints();
-        List<Integer> indices = path.getWaypointIndices();
-        int reversals = 0;
-        for (int k = 1; k < indices.size() - 1; k++) {
-            int at = indices.get(k);
-            if (at > 0 && at + 1 < points.size()
-                    && points.getLat(at - 1) == points.getLat(at + 1) && points.getLon(at - 1) == points.getLon(at + 1)) {
-                reversals++;
-            }
-        }
-        return reversals;
-    }
-
-    private double reversalWeight(String profileName) {
-        Profile profile = getProfile(profileName);
-        if (profile == null || !profile.hasTurnCosts()) {
-            return 0;
-        }
-        int uTurnCosts = profile.getTurnCostsConfig().getUTurnCosts();
-        // negative means u-turns are forbidden outright
-        return uTurnCosts < 0 ? Double.POSITIVE_INFINITY : uTurnCosts;
-    }
-
-    private static List<GHPoint> core(GHPoint prev, GHPoint via, GHPoint next) {
-        List<GHPoint> points = new ArrayList<>(3);
-        if (prev != null) {
-            points.add(prev);
-        }
-        points.add(via);
-        if (next != null) {
-            points.add(next);
-        }
-        return points;
-    }
-
-    private static List<GHPoint> withContext(GHPoint before, List<GHPoint> core, GHPoint after) {
-        List<GHPoint> points = new ArrayList<>(core.size() + 2);
-        if (before != null) {
-            points.add(before);
-        }
-        points.addAll(core);
-        if (after != null) {
-            points.add(after);
-        }
-        return points;
-    }
-
-    private GHRequest scoringRequest(GHRequest template, List<GHPoint> points) {
+    private GHRequest scoringRequest(GHRequest template, List<GHPoint> points, boolean withGeometry) {
         GHRequest request = new GHRequest(points);
         request.setProfile(template.getProfile());
         request.setCustomModel(template.getCustomModel());
         request.setSnapPreventions(template.getSnapPreventions());
         request.getHints().putAll(template.getHints());
         request.putHint(Parameters.Routing.INSTRUCTIONS, false);
-        request.putHint(Parameters.Routing.CALC_POINTS, true);
-        // unsimplified geometry: closest points found on it lie exactly on a track, and reversals
-        // at waypoints show up as exact A, waypoint, A repeats
+        request.putHint(Parameters.Routing.CALC_POINTS, withGeometry);
+        // unsimplified geometry, so the closest point found on it lies exactly on a track
         request.putHint(Parameters.Routing.WAY_POINT_MAX_DISTANCE, 0);
         return request;
     }
 
     private static double distance(GHPoint a, GHPoint b) {
         return DistanceCalcEarth.DIST_EARTH.calcDist(a.getLat(), a.getLon(), b.getLat(), b.getLon());
-    }
-
-    private static boolean samePoint(GHPoint a, GHPoint b) {
-        return a.getLat() == b.getLat() && a.getLon() == b.getLon();
     }
 
     private static GHPoint closestPointOnPath(GHPoint point, PointList path) {
