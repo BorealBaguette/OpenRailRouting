@@ -239,6 +239,9 @@ public class RailwayRoutingBundle implements ConfiguredBundle<RailwayRoutingServ
         hopper.setSnapPreferenceRadius(Double.parseDouble(configuration.getString(
                 "routing.snap.preference_radius", "100")
         ));
+        hopper.setSoftWaypointRadius(Double.parseDouble(configuration.getString(
+                "routing.snap.soft_waypoint_radius", "50")
+        ));
         environment.lifecycle().manage(graphHopperManaged);
         environment.jersey().register(new AbstractBinder() {
             @Override

@@ -14,7 +14,7 @@ This project is a stub intended to experiment with replacing Trainlog's default 
 From the repo root, use the `Makefile`:
 
 ```bash
-make dev   # start with a small OSM extract (France) — fast iteration
+make dev   # start with a small OSM extract (Norway) — fast iteration
 make prod  # start with the full worldwide rail network (see docker/regions.wanted)
 ```
 
@@ -26,7 +26,7 @@ fresh download and reimport, use `make dev-refresh` / `make prod-refresh` instea
 `osmium-tool` and `wget` must be installed on the host (the fetch/filter step runs outside
 Docker, before the data is mounted into the container).
 
-`make dev`/`make dev-refresh` use `europe/france` by default; override with
+`make dev`/`make dev-refresh` use `europe/norway` by default; override with
 `DEV_REGION=europe/belgium make dev-refresh`. `make prod`/`make prod-refresh` download every
 region listed in `docker/regions.wanted` (worldwide by default).
 
@@ -47,6 +47,47 @@ make promote-staged  # swap the staged graph into place - the actual (brief) cut
 
 The previous graph is kept at `docker/osm/filtered_train.osm-gh.old` after promoting, for
 manual rollback, until you remove it yourself once you're happy with the new one.
+
+### Network
+
+The router joins the `trainlog_network` Docker network, which it shares with the
+`services_proxy` nginx. nginx reaches it by container name on its container port
+(`train-gh.srv.trainlog.me` → `train_routing_gh:8989`). `make refresh`/`restart`/`promote-staged`
+create the network first if this machine doesn't have it (`make network`). Plain
+`docker compose up` expects it to exist already.
+
+### Running a second instance side by side
+
+To try a new version next to the running one, use a separate checkout, e.g.
+`git worktree add ../OpenRailRouting-next <branch>`. That gives it its own data directories. In
+that checkout, create `docker/.env` (gitignored):
+
+```
+COMPOSE_PROJECT_NAME=orr-next
+ORR_IMAGE=orr-next-openrailrouting
+ORR_CONTAINER_NAME=train_routing_gh_next
+ORR_PORT=8991
+```
+
+All four lines are needed:
+- `COMPOSE_PROJECT_NAME`: by default both checkouts are the project `docker` (after the
+  folder name). Without this, `up` in one would replace the other's container.
+- `ORR_IMAGE`: otherwise building one overwrites the image the other restarts from.
+  `reimport-staged.sh` picks it up too.
+- `ORR_CONTAINER_NAME`: container names are global, and the name is what nginx uses to find the
+  router.
+- `ORR_PORT`: the host port. It only matters for direct access; nginx goes through the
+  network.
+
+To expose it through nginx, add a line to `nginx.conf` in the infra repo, next to `train-gh`:
+
+```
+if ($service = "train-gh-next") { set $target "train_routing_gh_next"; set $port 8989; }
+```
+
+It's then reachable at `train-gh-next.srv.trainlog.me`. Trainlog can be pointed at it with
+`NEW_TRAIN_ROUTER_URL`. Each instance starts Java with `-Xmx32g`, so check the host has memory
+for both before loading the world graph twice.
 
 ### Manual / custom extracts
 

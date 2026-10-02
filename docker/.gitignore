@@ -1,1 +1,3 @@
 osm/*
+.env
+osm-staging/

@@ -2,7 +2,7 @@
 # Fetches and filters OSM rail data for OpenRailRouting.
 #
 # Usage:
-#   fetch-osm.sh dev    # single small region, fast iteration (default: europe/france)
+#   fetch-osm.sh dev    # single small region, fast iteration (default: europe/norway)
 #   fetch-osm.sh prod   # every region in regions.wanted, merged (default: worldwide)
 #
 # Requires `wget` and `osmium` (osmium-tool) on the host. Output defaults to
@@ -48,7 +48,7 @@ filter_region() {
 
 case "$MODE" in
     dev)
-        DEV_REGION="${DEV_REGION:-europe/france}"
+        DEV_REGION="${DEV_REGION:-europe/norway}"
         mkdir -p "$WORLD_DIR" "$OSM_DIR"
         pbf="$(download_region "$DEV_REGION")"
         filter_region "$pbf" "$OUTPUT"

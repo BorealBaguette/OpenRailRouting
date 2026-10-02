@@ -1,8 +1,8 @@
-.PHONY: dev dev-refresh prod prod-refresh refresh restart logs stop clean help build stage stage-dev stage-prod promote-staged
+.PHONY: dev dev-refresh prod prod-refresh refresh restart logs stop clean help build stage stage-dev stage-prod promote-staged network
 
 OSM_DATA := docker/osm/filtered_train.osm.pbf
 
-# Dev: ensure a small OSM extract (default: France) is present and the stack is up.
+# Dev: ensure a small OSM extract (default: Norway) is present and the stack is up.
 # Does not re-fetch or reimport if data already exists — use 'make dev-refresh' for that.
 dev:
 	@if [ -f $(OSM_DATA) ]; then \
@@ -37,7 +37,7 @@ prod-refresh:
 	$(MAKE) refresh
 
 # Refresh: Remove GraphHopper data and rebuild containers
-refresh:
+refresh: network
 	@echo "🔄 Refreshing: Removing GraphHopper data and rebuilding..."
 	sudo rm -rf docker/osm/filtered_train.osm-gh
 	docker compose -f docker/docker-compose.yml down
@@ -46,7 +46,7 @@ refresh:
 	docker compose -f docker/docker-compose.yml logs -f
 
 # Restart: Restart containers without removing GraphHopper data
-restart:
+restart: network
 	@echo "🔄 Restarting containers (keeping GraphHopper data)..."
 	docker compose -f docker/docker-compose.yml down
 	docker compose -f docker/docker-compose.yml up -d
@@ -65,7 +65,7 @@ build:
 # Run 'make build' first if you need the new image's code, then one of these, then
 # 'make promote-staged' to do the actual (brief, seconds-long) cutover.
 #   make stage        - reimport from the OSM data already on disk
-#   make stage-dev     - fetch a fresh dev extract (France) into staging first
+#   make stage-dev     - fetch a fresh dev extract (Norway) into staging first
 #   make stage-prod    - fetch a fresh worldwide extract into staging first
 stage:
 	docker/scripts/reimport-staged.sh
@@ -82,7 +82,7 @@ stage-prod:
 # until you're happy with the new one and remove it yourself. Uses a throwaway container
 # (not sudo) for the root-owned graph-cache directories, since GraphHopper writes them
 # as root inside the container.
-promote-staged:
+promote-staged: network
 	@if [ ! -d docker/osm-staging/filtered_train.osm-gh ]; then \
 		echo "error: no staged graph found - run 'make stage' (or stage-dev/stage-prod) first" >&2; \
 		exit 1; \
@@ -98,6 +98,11 @@ promote-staged:
 	docker compose -f docker/docker-compose.yml up -d
 	@echo "✅ Promoted. Previous graph kept at docker/osm/filtered_train.osm-gh.old until you remove it."
 	docker compose -f docker/docker-compose.yml logs -f
+
+# Network: the router joins trainlog_network (shared with the services_proxy nginx); create it
+# if this machine doesn't have it yet, e.g. a dev box without the rest of the Trainlog stack.
+network:
+	@docker network inspect trainlog_network >/dev/null 2>&1 || docker network create trainlog_network
 
 # Stop containers
 stop:
@@ -118,7 +123,7 @@ clean:
 # Help
 help:
 	@echo "Available commands:"
-	@echo "  make dev          - Start with dev OSM extract (France), fetching only if missing"
+	@echo "  make dev          - Start with dev OSM extract (Norway), fetching only if missing"
 	@echo "  make dev-refresh  - Force a fresh dev OSM extract download and reimport"
 	@echo "  make prod         - Start with full worldwide OSM extract, fetching only if missing"
 	@echo "  make prod-refresh - Force a fresh worldwide OSM extract download and reimport"

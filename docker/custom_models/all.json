@@ -30,6 +30,10 @@
     {
       "if": "railway_service == SIDING || railway_service == SPUR || railway_service == YARD",
       "limit_to": "30"
+    },
+    {
+      "if": "railway_service == CROSSOVER",
+      "limit_to": "25"
     }
   ]
 }

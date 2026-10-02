@@ -1,11 +1,13 @@
 services:
   openrailrouting:
-    container_name: "train_routing_gh"
+    # Overridable from docker/.env to run a second instance next to this one; see docker/README.md.
+    image: "${ORR_IMAGE:-docker-openrailrouting}"
+    container_name: "${ORR_CONTAINER_NAME:-train_routing_gh}"
     build:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "8989:8989"
+      - "${ORR_PORT:-8989}:8989"
     volumes:
       - ./config.yml:/app/config.yml:ro
       - ./osm:/app/data
@@ -13,3 +15,10 @@ services:
       - ./custom_models:/app/custom_models:ro 
     environment:
       - JAVA_OPTS=-Xmx32g
+
+# Shared with the services_proxy nginx, which reaches the router by container name
+# (train-gh.srv.trainlog.me -> train_routing_gh:8989). The Makefile creates it if missing.
+networks:
+  default:
+    name: trainlog_network
+    external: true

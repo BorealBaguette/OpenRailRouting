@@ -19,7 +19,13 @@ DOCKER_DIR="$(dirname "$SCRIPT_DIR")"
 STAGING_DIR="$DOCKER_DIR/osm-staging"
 LIVE_PBF="$DOCKER_DIR/osm/filtered_train.osm.pbf"
 STAGING_PBF="$STAGING_DIR/filtered_train.osm.pbf"
-IMAGE="${IMAGE:-docker-openrailrouting}"
+# same image the compose file builds, including an ORR_IMAGE override in docker/.env
+if [[ -f "$DOCKER_DIR/.env" ]]; then
+    set -a
+    source "$DOCKER_DIR/.env"
+    set +a
+fi
+IMAGE="${IMAGE:-${ORR_IMAGE:-docker-openrailrouting}}"
 
 mkdir -p "$STAGING_DIR"
 

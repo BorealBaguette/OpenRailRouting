@@ -69,8 +69,10 @@ graphhopper:
     - name: all
       turn_costs:
         vehicle_types: [train, tram, light_rail, subway]
-        # Reversing costs 3 minutes.
-        u_turn_costs: 180
+        # Reversing costs 10 minutes: steep enough that the router only backtracks when a
+        # waypoint genuinely forces it (e.g. a real dead-end), not as a cheap way to shave a
+        # few seconds off an otherwise-equivalent route.
+        u_turn_costs: 600
       custom_model_files: [all.json, preferred_direction.json]
     # Favour their named railway_class over others without hard-excluding them: OSM typing is
     # blurry at the edges (tram-train, Wuppertal's railway=monorail Schwebebahn, etc.), so these
@@ -78,17 +80,17 @@ graphhopper:
     - name: train
       turn_costs:
         vehicle_types: [train, tram, light_rail, subway]
-        u_turn_costs: 180
+        u_turn_costs: 600
       custom_model_files: [train.json, preferred_direction.json]
     - name: metro
       turn_costs:
         vehicle_types: [train, tram, light_rail, subway]
-        u_turn_costs: 180
+        u_turn_costs: 600
       custom_model_files: [metro.json, preferred_direction.json]
     - name: tram
       turn_costs:
         vehicle_types: [train, tram, light_rail, subway]
-        u_turn_costs: 180
+        u_turn_costs: 600
       custom_model_files: [tram.json, preferred_direction.json]
 
   # instead of the inbuilt custom models (see ./src/main/resources/com/graphhopper/custom_models)
@@ -262,6 +264,15 @@ graphhopper:
   # multi-modal stations can have a few hundred meters between an interchange entrance and the
   # actual platform tracks, hence the higher-than-you'd-guess default.
   routing.snap.preference_radius: "300"
+
+  # Waypoints are "hard" or "soft", set per request with waypoint_modes=soft,hard,... (one entry
+  # per point; default all soft). A hard waypoint snaps to its nearest edge, unmodified. A soft
+  # waypoint is an approximate location (e.g. a stop coordinate imported from MOTIS): if the
+  # direct route between its neighbours already passes within (its distance to the track + this
+  # radius), it's moved onto that route instead of forcing a detour; otherwise the cheapest
+  # track within this radius of its snap is used, so it respects preferred_direction even when
+  # the point sits on the other track of a double-track line.
+  routing.snap.soft_waypoint_radius: "50"
 
 
   #### Storage ####
