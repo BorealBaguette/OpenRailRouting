@@ -58,10 +58,9 @@ public class RailwayHopper extends GraphHopper {
      *  that grow past this are assumed to be "big enough" (likely the real network) and are left
      *  alone rather than excluded. */
     private int componentFloodFillCap = 2000;
-    /** How much farther (in meters) than the true nearest edge we're willing to snap in order to
-     *  land on the profile's preferred railway_class instead - e.g. a tram stop a little farther
-     *  than an adjacent train platform. Bounded, not absolute: beyond this, use the nearest edge
-     *  regardless of category. */
+    /** How much farther (in meters) than the nearest track a soft waypoint looks for tracks of the
+     *  profile's own railway_class - e.g. a tram stop a little farther than an adjacent train
+     *  platform, or RER E's platforms ~110 m from the La Défense station node. */
     private double snapPreferenceRadius = 100.0;
     /** Slack (in meters, on top of the waypoint's own distance to the track) within which a soft
      *  waypoint counts as passed by a route, and within which alternative tracks are considered. */
@@ -70,7 +69,10 @@ public class RailwayHopper extends GraphHopper {
     /** Request hint: comma-separated "hard"/"soft" per point, e.g. waypoint_modes=soft,hard,soft.
      *  A single hint because GraphHopper drops repeated unknown query parameters. */
     public static final String WAYPOINT_MODES_HINT = "waypoint_modes";
-    private static final int MAX_SOFT_TRACK_CANDIDATES = 6;
+    /** Leg evaluations allowed per pair of neighbouring waypoints when they're close together;
+     *  fewer for farther pairs, whose legs each cost more to route (see combinationBudget). */
+    private static final int MAX_COMBINATIONS_PER_PAIR = 200;
+    private static final int MIN_COMBINATIONS_PER_PAIR = 4;
     private static final double DUPLICATE_SNAP_DISTANCE = 2.0;
 
     enum WaypointMode {
@@ -108,20 +110,14 @@ public class RailwayHopper extends GraphHopper {
      * WAYPOINT_MODES_HINT, default SOFT). HARD waypoints get plain nearest-edge snapping and are
      * exempt from everything below; SOFT waypoints go through all of it.
      * <p>
-     * 1. Snapping is purely nearest-edge and blind to railway_class, so e.g. a "tram" query for a
-     * point right in front of a train station can snap onto the station's platform tracks instead
-     * of the tram line a few meters away. Before routing, each waypoint is nudged onto the
-     * profile's preferred railway_class if a matching edge exists within snapPreferenceRadius of
-     * the true nearest edge - a soft preference, not a hard requirement. Candidates whose local
-     * component is small (a dead-end siding/spur/stub) are skipped in favour of the next-nearest
-     * one, since snapping onto a dead end forces a there-and-back detour instead of a real route.
+     * 1. Soft waypoints are placed together (see resolveSoftWaypoints): each on one of the nearby
+     * running tracks - reaching farther for the profile's own railway_class - choosing the
+     * combination that makes the cheapest route overall. Plain snapping is nearest-edge and blind
+     * to railway_class, so e.g. a "tram" query in front of a train station would otherwise snap
+     * onto the station's platform tracks instead of the tram line a few meters away; and an
+     * imprecise or wrong-track point would cause a detour or a reversal.
      * <p>
-     * 2. Soft waypoints are then placed together (see resolveSoftWaypoints): each on one of a few
-     * nearby tracks, choosing the combination that makes the cheapest route overall, so an
-     * imprecise or wrong-track point never causes a detour or a reversal when a direct route
-     * exists.
-     * <p>
-     * 3. If the (possibly nudged) request still fails because a waypoint's edge belongs to a
+     * 2. If the request still fails because a waypoint's edge belongs to a
      * component disconnected from the rest of the route (e.g. a branch line not joined to the
      * main network in OSM), retry substituting nearby alternate snap candidates for one waypoint
      * at a time. Each failing candidate's entire local component is flood-filled and excluded
@@ -136,8 +132,7 @@ public class RailwayHopper extends GraphHopper {
         } catch (IllegalArgumentException e) {
             return new GHResponse().addError(e);
         }
-        GHRequest preferredRequest = preferCategorySnaps(request, modes);
-        GHRequest resolvedRequest = resolveSoftWaypoints(request.getPoints(), preferredRequest, modes);
+        GHRequest resolvedRequest = resolveSoftWaypoints(request.getPoints(), request, modes);
         GHResponse response = super.route(resolvedRequest);
         if (resolvedRequest.getPoints().size() < 2 || !hasSnapOrConnectivityError(response)) {
             return response;
@@ -204,7 +199,18 @@ public class RailwayHopper extends GraphHopper {
         for (int i = 0; i < count; i++) {
             candidates.add(modes.get(i) == WaypointMode.SOFT
                     ? softCandidates(i, rawPoints.get(i), anchors, ctx)
-                    : Collections.singletonList(anchors.get(i)));
+                    : new ArrayList<>(Collections.singletonList(anchors.get(i))));
+        }
+        // Every pair of neighbouring candidates costs one leg to route. Trim the least likely
+        // candidates (lists are best-first) wherever a pair would exceed its budget.
+        for (int i = 0; i + 1 < count; i++) {
+            List<GHPoint> from = candidates.get(i);
+            List<GHPoint> to = candidates.get(i + 1);
+            int budget = combinationBudget(distance(rawPoints.get(i), rawPoints.get(i + 1)));
+            while (from.size() * to.size() > budget && (from.size() > 1 || to.size() > 1)) {
+                List<GHPoint> larger = from.size() >= to.size() && from.size() > 1 ? from : to;
+                larger.remove(larger.size() - 1);
+            }
         }
 
         // cost[c]: cheapest chain from the first waypoint to candidate c of the current one
@@ -282,7 +288,10 @@ public class RailwayHopper extends GraphHopper {
         }
     }
 
-    /** Candidate positions for soft waypoint i; the first is its current snap, kept on ties. */
+    /**
+     * Candidate positions for soft waypoint i, best first: its plain snap (kept on ties), the
+     * closest point on the route between its neighbours, then nearby running tracks.
+     */
     private List<GHPoint> softCandidates(int i, GHPoint raw, List<GHPoint> anchors, SoftContext ctx) {
         GHPoint anchor = anchors.get(i);
         List<GHPoint> candidates = new ArrayList<>();
@@ -291,7 +300,9 @@ public class RailwayHopper extends GraphHopper {
         if (!anchorSnap.isValid()) {
             return candidates;
         }
-        double tolerance = softTolerance(raw, anchorSnap, ctx);
+        double nearest = nearestRunningTrackDistance(raw, anchorSnap, ctx);
+        double tolerance = nearest + softWaypointRadius;
+        double preferredTolerance = nearest + Math.max(softWaypointRadius, snapPreferenceRadius);
         List<TrackPoint> found = new ArrayList<>();
         if (i > 0 && i < anchors.size() - 1) {
             // where the route between its neighbours already passes, if that's close enough
@@ -306,7 +317,7 @@ public class RailwayHopper extends GraphHopper {
                 }
             }
         }
-        found.addAll(nearbyRunningTracks(raw, tolerance, ctx));
+        found.addAll(nearbyRunningTracks(raw, tolerance, preferredTolerance, ctx));
         List<TrackPoint> kept = new ArrayList<>();
         kept.add(TrackPoint.of(anchorSnap.getSnappedPoint(), anchorSnap));
         for (TrackPoint candidate : found) {
@@ -318,15 +329,22 @@ public class RailwayHopper extends GraphHopper {
         return candidates;
     }
 
-    /** Distance to the nearest running track (not a yard or siding: a point beside a yard is still
-     *  "at" the line the yard belongs to), plus softWaypointRadius. */
-    private double softTolerance(GHPoint raw, Snap anchorSnap, SoftContext ctx) {
+    /** Distance to the nearest running track: not a yard or siding, since a point beside a yard
+     *  is still "at" the line the yard belongs to. */
+    private double nearestRunningTrackDistance(GHPoint raw, Snap anchorSnap, SoftContext ctx) {
         double trackDistance = distance(raw, anchorSnap.getSnappedPoint());
         Snap runningSnap = ctx.locationIndex.findClosest(raw.getLat(), raw.getLon(), ctx.runningTrackFilter);
         if (runningSnap.isValid()) {
             trackDistance = Math.max(trackDistance, runningSnap.getQueryDistance());
         }
-        return trackDistance + softWaypointRadius;
+        return trackDistance;
+    }
+
+    /** Leg evaluations allowed between two neighbouring waypoints this far apart: many for short
+     *  legs (big interchanges need them), fewer as each leg gets longer and costlier to route. */
+    private static int combinationBudget(double meters) {
+        double budget = MAX_COMBINATIONS_PER_PAIR / (1 + meters / 30_000);
+        return (int) Math.max(MIN_COMBINATIONS_PER_PAIR, Math.min(MAX_COMBINATIONS_PER_PAIR, budget));
     }
 
     private EdgeFilter runningTrackFilter(EdgeFilter snapFilter) {
@@ -339,9 +357,9 @@ public class RailwayHopper extends GraphHopper {
     }
 
     /**
-     * The closest point of every running track (not a siding, yard or spur) within maxDistance of
-     * the point, the profile's own railway classes first, then nearest first, one per spot, at most
-     * MAX_SOFT_TRACK_CANDIDATES. Centred on the
+     * The closest point of every running track (not a siding, yard or spur) near the point - within
+     * preferredDistance for the profile's own railway classes, maxDistance for others - those
+     * classes first, then nearest first, one per spot. Centred on the
      * point itself rather than on its snap: a station node often sits between the lines it
      * serves, and from the snap on one of them, its own sidings come before the other line.
      * <p>
@@ -349,8 +367,9 @@ public class RailwayHopper extends GraphHopper {
      * a neighbouring edge comes closer, is the same track further along - not an alternative.
      * Left in, it would let an endpoint slide along its own track towards the rest of the trip.
      */
-    private List<TrackPoint> nearbyRunningTracks(GHPoint point, double maxDistance, SoftContext ctx) {
-        double latDelta = maxDistance / DistanceCalcEarth.METERS_PER_DEGREE;
+    private List<TrackPoint> nearbyRunningTracks(GHPoint point, double maxDistance, double preferredDistance,
+            SoftContext ctx) {
+        double latDelta = Math.max(maxDistance, preferredDistance) / DistanceCalcEarth.METERS_PER_DEGREE;
         double lonDelta = latDelta / Math.cos(Math.toRadians(point.getLat()));
         BBox box = new BBox(point.getLon() - lonDelta, point.getLon() + lonDelta,
                 point.getLat() - latDelta, point.getLat() + latDelta);
@@ -367,7 +386,8 @@ public class RailwayHopper extends GraphHopper {
             }
             PointList geometry = edge.fetchWayGeometry(FetchMode.ALL);
             GHPoint closest = closestPointOnPath(point, geometry);
-            if (closest == null || distance(point, closest) > maxDistance) {
+            boolean preferred = ctx.preferredClass.accept(edge);
+            if (closest == null || distance(point, closest) > (preferred ? preferredDistance : maxDistance)) {
                 return;
             }
             int endNode = -1;
@@ -378,7 +398,7 @@ public class RailwayHopper extends GraphHopper {
                 endNode = edge.getAdjNode();
             }
             found.add(new TrackPoint(closest, distance(point, closest), edgeId, edge.getBaseNode(), edge.getAdjNode(),
-                    endNode, ctx.preferredClass.accept(edge)));
+                    endNode, preferred));
         });
         found.removeIf(candidate -> candidate.endNode >= 0 && found.stream().anyMatch(other -> other != candidate
                 && (other.baseNode == candidate.endNode || other.adjNode == candidate.endNode)
@@ -389,9 +409,6 @@ public class RailwayHopper extends GraphHopper {
                 .thenComparingDouble(candidate -> candidate.distance));
         List<TrackPoint> distinct = new ArrayList<>();
         for (TrackPoint candidate : found) {
-            if (distinct.size() >= MAX_SOFT_TRACK_CANDIDATES) {
-                break;
-            }
             if (distinct.stream().noneMatch(c -> c.sameSpot(candidate))) {
                 distinct.add(candidate);
             }
@@ -482,89 +499,6 @@ public class RailwayHopper extends GraphHopper {
             }
         }
         return best;
-    }
-
-    private GHRequest preferCategorySnaps(GHRequest request, List<WaypointMode> modes) {
-        Set<RailwayClass> preferred = PREFERRED_CLASSES_BY_PROFILE.get(request.getProfile());
-        if (preferred == null || request.getPoints().isEmpty()) {
-            return request;
-        }
-        EnumEncodedValue<RailwayClass> railwayClassEnc;
-        EnumEncodedValue<RailwayService> railwayServiceEnc;
-        try {
-            railwayClassEnc = getEncodingManager().getEnumEncodedValue(RailwayClass.KEY, RailwayClass.class);
-            railwayServiceEnc = getEncodingManager().getEnumEncodedValue(RailwayService.KEY, RailwayService.class);
-        } catch (IllegalArgumentException e) {
-            return request;
-        }
-
-        Router router = createRouter();
-        Solver solver = router.createSolver(request);
-        solver.init();
-        EdgeFilter snapFilter = solver.createSnapFilter();
-        LocationIndex locationIndex = getLocationIndex();
-        BaseGraph baseGraph = getBaseGraph();
-
-        List<GHPoint> points = request.getPoints();
-        List<GHPoint> adjustedPoints = new ArrayList<>(points);
-        Set<Integer> adjustedIndices = new HashSet<>();
-
-        for (int i = 0; i < points.size(); i++) {
-            if (modes.get(i) == WaypointMode.HARD) {
-                continue;
-            }
-            GHPoint point = points.get(i);
-            Snap nearest = locationIndex.findClosest(point.getLat(), point.getLon(), snapFilter);
-            if (!nearest.isValid() || preferred.contains(nearest.getClosestEdge().get(railwayClassEnc))) {
-                continue;
-            }
-            Snap preferredSnap = findWellConnectedPreferredSnap(point, preferred, railwayClassEnc, railwayServiceEnc,
-                    snapFilter, locationIndex, baseGraph, nearest.getQueryDistance() + snapPreferenceRadius);
-            if (preferredSnap != null) {
-                adjustedPoints.set(i, preferredSnap.getSnappedPoint());
-                adjustedIndices.add(i);
-            }
-        }
-
-        return adjustedIndices.isEmpty() ? request : copyRequest(request, adjustedPoints, adjustedIndices);
-    }
-
-    /**
-     * Searches for the nearest preferred-class edge within maxDistance, skipping two kinds of bad
-     * candidates in favour of the next-nearest one:
-     * <p>
-     * - railway_service SIDING/YARD/SPUR edges. These are dead-end stub tracks (stabling sidings,
-     * yard throats, etc.) that are nevertheless part of the same well-connected component as the
-     * running line they branch off - so the flood-fill check below doesn't catch them - but
-     * snapping onto one still forces a there-and-back detour to reach and leave the stub.
-     * <p>
-     * - candidates whose local component is small (a genuine dead-end/disconnected stub not
-     * caught by the service-tag check, e.g. an untagged short spur).
-     * <p>
-     * Bounded by maxSnapAttempts to cap worst-case cost. Returns null if no suitable candidate is
-     * found within maxDistance.
-     */
-    private Snap findWellConnectedPreferredSnap(GHPoint point, Set<RailwayClass> preferred,
-            EnumEncodedValue<RailwayClass> railwayClassEnc, EnumEncodedValue<RailwayService> railwayServiceEnc,
-            EdgeFilter snapFilter, LocationIndex locationIndex, BaseGraph baseGraph, double maxDistance) {
-        Set<Integer> excludedEdges = new HashSet<>();
-        for (int attempt = 0; attempt < maxSnapAttempts; attempt++) {
-            final Set<Integer> excludedSoFar = excludedEdges;
-            EdgeFilter preferredFilter = edge -> !excludedSoFar.contains(edge.getEdge()) && snapFilter.accept(edge)
-                    && preferred.contains(edge.get(railwayClassEnc))
-                    && !isDeadEndService(edge.get(railwayServiceEnc));
-            Snap candidate = locationIndex.findClosest(point.getLat(), point.getLon(), preferredFilter);
-            if (!candidate.isValid() || candidate.getQueryDistance() > maxDistance) {
-                return null;
-            }
-            Set<Integer> component = floodFillSmallComponent(baseGraph, snapFilter,
-                    candidate.getClosestEdge().getBaseNode(), componentFloodFillCap);
-            if (component == null) {
-                return candidate;
-            }
-            excludedEdges.addAll(component);
-        }
-        return null;
     }
 
     private boolean isDeadEndService(RailwayService service) {
