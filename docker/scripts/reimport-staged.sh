@@ -54,7 +54,7 @@ docker run --rm \
     -v "$DOCKER_DIR/config.yml:/app/config.yml:ro" \
     -v "$DOCKER_DIR/custom_models:/app/custom_models:ro" \
     "$IMAGE" \
-    sh -c 'java -Xmx32g -jar target/railway_routing-*.jar import config.yml'
+    sh -c 'java -Xmx48g -jar target/railway_routing-*.jar import config.yml'
 
 echo "==> Staging import complete: $STAGING_DIR/filtered_train.osm-gh"
 echo "    Run 'make promote-staged' to switch the live service over to it."

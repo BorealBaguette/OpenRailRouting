@@ -1,6 +1,8 @@
 # Runtime data, bind-mounted by docker-compose.yml — never needed in the build context/image.
 docker/osm/
+docker/osm-staging/
 docker/graph-cache/
+node_modules/
 
 # Build artifacts / VCS / editor cruft
 target/

@@ -139,7 +139,11 @@ graphhopper:
 
   # To make CH preparation faster for multiple profiles you can increase the default threads if you have enough RAM.
   # Change this setting only if you know what you are doing and if the default worked for you.
-  # prepare.ch.threads: 1
+  # One thread per CH profile prepares all four at once: ~4x faster on the world graph, but each
+  # preparation needs its own working memory, which is why the import step (Dockerfile,
+  # reimport-staged.sh) runs with a 48 GB heap instead of the server's 32 GB. If an import ever
+  # fails with OutOfMemoryError, lower this to 2.
+  prepare.ch.threads: 4
 
   # To tune the performance vs. memory usage for the hybrid mode use
   # prepare.lm.landmarks: 16
