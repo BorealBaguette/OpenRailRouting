@@ -19,7 +19,7 @@
     },
     {
       "else_if": "railway_class == LIGHT_RAIL",
-      "multiply_by": "0.5"
+      "multiply_by": "0.2"
     },
     {
       "else_if": "railway_class == TRAM",
