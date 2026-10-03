@@ -258,24 +258,23 @@ graphhopper:
   # routing.snap.component_flood_fill_cap: "2000"
 
   # Snapping is purely nearest-edge and blind to railway_class, so e.g. a "tram" query for a point
-  # right in front of a train station can snap onto the station's platform tracks instead of the
-  # tram line a few meters away, or a mainline "train" query near a dense multi-line interchange
-  # can snap onto a nearby metro/subway tunnel instead of the station's own platform tracks. For
-  # profiles with preferred railway_classes (train -> RAIL, metro -> SUBWAY, tram -> TRAM/LIGHT_RAIL; see
-  # RailwayHopper.java), each waypoint is nudged onto a matching edge if one exists within this
-  # many extra meters of the true nearest edge - a soft preference (falls back to the nearest edge
-  # of any category when nothing matching is close enough), not a hard requirement. Large
-  # multi-modal stations can have a few hundred meters between an interchange entrance and the
-  # actual platform tracks, hence the higher-than-you'd-guess default.
+  # right in front of a train station would snap onto the station's platform tracks instead of the
+  # tram line a few meters away, and a station node at a hub can sit 100+ m from the platforms of
+  # the line actually travelled (La Défense: RER E ~110 m away, RER A and Transilien within 5 m).
+  # Soft waypoints therefore consider tracks of the profile's own railway_classes (train -> RAIL,
+  # metro -> SUBWAY, tram -> TRAM/LIGHT_RAIL; see RailwayHopper.java) up to this many meters
+  # beyond the nearest track, other tracks up to soft_waypoint_radius beyond it, and the route
+  # picks whichever combination is cheapest overall. Hard waypoints are unaffected.
   routing.snap.preference_radius: "300"
 
   # Waypoints are "hard" or "soft", set per request with waypoint_modes=soft,hard,... (one entry
   # per point; default all soft). A hard waypoint snaps to its nearest edge, unmodified. A soft
   # waypoint is an approximate location (e.g. a stop coordinate imported from MOTIS): if the
   # direct route between its neighbours already passes within (its distance to the track + this
-  # radius), it's moved onto that route instead of forcing a detour; otherwise the cheapest
-  # track within this radius of its snap is used, so it respects preferred_direction even when
-  # the point sits on the other track of a double-track line.
+  # radius), that point of the route is one of its candidates; so are the other running tracks
+  # within this radius of the nearest one (preference_radius for the profile's own tracks). All
+  # soft waypoints are then placed together on whichever candidates make the cheapest route,
+  # which avoids detours and reversals and respects preferred_direction on double-track lines.
   routing.snap.soft_waypoint_radius: "50"
 
 
