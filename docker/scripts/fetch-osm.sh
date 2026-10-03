@@ -34,8 +34,18 @@ region_pbf() {
     echo "$WORLD_DIR/$(echo "$1" | tr '/' '_')-latest.osm.pbf"
 }
 
-# Downloads a region unless the cached copy is already as new as Geofabrik's. Goes through a
-# .part file so an interrupted download is never mistaken for a complete, up-to-date one.
+region_url() {
+    echo "https://download.geofabrik.de/${1}-latest.osm.pbf"
+}
+
+human() {
+    numfmt --to=iec --suffix=B --format=%.1f "$1"
+}
+
+# Downloads a region unless the cached copy is already as new as Geofabrik's. Runs in the
+# background, so it's silent; its one-line result is left in a .msg file for wait_for_download
+# to print. Goes through a .part file so an interrupted download is never mistaken for a
+# complete, up-to-date one.
 download_region() {
     local region="$1"
     local dest
@@ -45,31 +55,70 @@ download_region() {
     if [[ -f "$dest" ]]; then
         condition=(-z "$dest")
     fi
-    echo "==> Downloading $region" >&2
-    local status
-    status="$(curl -fL -R --progress-bar "${condition[@]}" -o "$dest.part" -w '%{http_code}' \
-        "https://download.geofabrik.de/${region}-latest.osm.pbf")"
+    local start status
+    start=$(date +%s)
+    status="$(curl -fsSL -R "${condition[@]}" -o "$dest.part" -w '%{http_code}' "$(region_url "$region")")"
     if [[ "$status" == "304" ]]; then
         rm -f "$dest.part"
-        echo "==> $region is already up to date" >&2
+        echo "==> $region: download already up to date" > "$dest.msg"
     else
         mv -f "$dest.part" "$dest"
+        local size seconds
+        size=$(stat -c %s "$dest")
+        seconds=$(( $(date +%s) - start ))
+        (( seconds > 0 )) || seconds=1
+        echo "==> $region: downloaded $(human "$size") in ${seconds}s ($(human $(( size / seconds )))/s)" > "$dest.msg"
     fi
+}
+
+# Waits for a background download, showing its progress meanwhile (only when there's nothing
+# else to show, i.e. filtering has caught up with downloading), then prints its result.
+wait_for_download() {
+    local pid="$1" region="$2"
+    local msg
+    msg="$(region_pbf "$region").msg"
+    if kill -0 "$pid" 2>/dev/null; then
+        local part total previous=0 now rate eta
+        part="$(region_pbf "$region").part"
+        total=$(curl -sIL "$(region_url "$region")" | tr -d '\r' \
+            | awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }')
+        while kill -0 "$pid" 2>/dev/null; do
+            now=$(stat -c %s "$part" 2>/dev/null || echo 0)
+            rate=$(( now > previous ? now - previous : 0 ))
+            eta="--"
+            if (( rate > 0 && total > now )); then
+                eta="$(( (total - now) / rate / 60 ))m$(( (total - now) / rate % 60 ))s"
+            fi
+            if (( now == 0 )); then
+                printf '\r    waiting for %s: checking for a newer version     ' "$region" >&2
+            else
+                printf '\r    waiting for %s: %s of %s, %s/s, ETA %s     ' "$region" \
+                    "$(human "$now")" "$(human "$total")" "$(human "$rate")" "$eta" >&2
+            fi
+            previous=$now
+            sleep 1
+        done
+        printf '\r\033[K' >&2
+    fi
+    wait "$pid"
+    cat "$msg" >&2
+    rm -f "$msg"
 }
 
 filter_region() {
     local input="$1"
     local output="$2"
-    echo "==> Filtering $(basename "$input") -> $(basename "$output")" >&2
-    osmium tags-filter --overwrite -o "$output" "$input" nw/railway
+    osmium tags-filter --progress --overwrite -o "$output" "$input" nw/railway
 }
 
 case "$MODE" in
     dev)
         DEV_REGION="${DEV_REGION:-europe/norway}"
         mkdir -p "$WORLD_DIR" "$OSM_DIR"
-        download_region "$DEV_REGION"
+        download_region "$DEV_REGION" &
+        wait_for_download $! "$DEV_REGION"
         # always re-filtered: OUTPUT is shared by whichever DEV_REGION was fetched last
+        echo "==> $DEV_REGION: filtering" >&2
         filter_region "$(region_pbf "$DEV_REGION")" "$OUTPUT"
         ;;
     prod)
@@ -84,27 +133,32 @@ case "$MODE" in
         # Downloading is network-bound and filtering CPU/disk-bound, so the next region
         # downloads in the background while the current one is filtered.
         trap 'jobs -p | xargs -r kill 2>/dev/null' EXIT
+        count=${#regions[@]}
+        echo "==> $count region(s); each one downloads in the background while the previous is filtered" >&2
         download_region "${regions[0]}" &
         download_pid=$!
         filtered_files=()
         for i in "${!regions[@]}"; do
             region="${regions[$i]}"
-            wait "$download_pid"
-            if (( i + 1 < ${#regions[@]} )); then
-                download_region "${regions[$((i + 1))]}" &
+            wait_for_download "$download_pid" "$region"
+            next=""
+            if (( i + 1 < count )); then
+                next="${regions[$((i + 1))]}"
+                download_region "$next" &
                 download_pid=$!
             fi
             pbf="$(region_pbf "$region")"
             filtered="$FILTERED_DIR/$(echo "$region" | tr '/' '_').osm.pbf"
             if [[ -f "$filtered" && "$filtered" -nt "$pbf" ]]; then
-                echo "==> $(basename "$filtered") is already up to date" >&2
+                echo "==> [$((i + 1))/$count] $region: filtered file already up to date" >&2
             else
+                echo "==> [$((i + 1))/$count] $region: filtering${next:+ (downloading $next in the background)}" >&2
                 filter_region "$pbf" "$filtered"
             fi
             filtered_files+=("$filtered")
         done
 
-        echo "==> Merging ${#filtered_files[@]} region(s) -> $(basename "$OUTPUT")"
+        echo "==> Merging $count region(s) -> $(basename "$OUTPUT")" >&2
         osmium merge --overwrite -o "$OUTPUT" "${filtered_files[@]}"
         ;;
     *)
