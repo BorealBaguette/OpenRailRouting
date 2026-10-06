@@ -21,13 +21,14 @@ class OSMRailwayClassParserTest {
         classEnc.init(new EncodedValue.InitializerConfig());
         OSMRailwayClassParser parser = new OSMRailwayClassParser(classEnc);
         IntsRef relFlags = new IntsRef(2);
+        // ways without railway=* never reach the parsers (see RailwayOSMParsers.acceptWay)
         ReaderWay way = new ReaderWay(29L);
-        way.setTag("highway", "primary");
         EdgeIntAccess edgeIntAccess = new ArrayEdgeIntAccess(1);
         int edgeId = 0;
-        parser.handleWayTags(edgeId, edgeIntAccess, way, relFlags);
-        assertEquals(RailwayClass.OTHER, classEnc.getEnum(false, edgeId, edgeIntAccess));
         way.setTag("railway", "disused");
+        parser.handleWayTags(edgeId, edgeIntAccess, way, relFlags);
+        assertEquals(RailwayClass.DISUSED, classEnc.getEnum(false, edgeId, edgeIntAccess));
+        way.setTag("railway", "platform");
         parser.handleWayTags(edgeId, edgeIntAccess, way, relFlags);
         assertEquals(RailwayClass.OTHER, classEnc.getEnum(false, edgeId, edgeIntAccess));
         way.setTag("railway", "rail");
