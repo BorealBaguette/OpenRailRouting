@@ -34,6 +34,8 @@ public class RailAccessParser extends AbstractAccessParser {
         if (railway.equals("rail") || railway.equals("light_rail") || 
             railway.equals("tram") || railway.equals("subway") || 
             railway.equals("narrow_gauge") || railway.equals("ferry") || 
+            railway.equals("funicular") || railway.equals("monorail") || 
+            railway.equals("miniature") || railway.equals("preserved") || 
             railway.equals("abandoned") || railway.equals("disused") || 
             railway.equals("proposed") || railway.equals("construction") || 
             railway.equals("razed")) {

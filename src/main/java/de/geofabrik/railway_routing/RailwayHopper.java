@@ -15,10 +15,14 @@ import java.util.Set;
 import com.graphhopper.GHRequest;
 import com.graphhopper.GHResponse;
 import com.graphhopper.GraphHopper;
+import com.graphhopper.config.Profile;
 import com.graphhopper.routing.Router;
 import com.graphhopper.routing.Router.Solver;
+import com.graphhopper.routing.ev.BooleanEncodedValue;
 import com.graphhopper.routing.ev.EnumEncodedValue;
+import com.graphhopper.routing.ev.Subnetwork;
 import com.graphhopper.routing.util.EdgeFilter;
+import com.graphhopper.routing.util.AllEdgesIterator;
 import com.graphhopper.storage.BaseGraph;
 import com.graphhopper.storage.index.LocationIndex;
 import com.graphhopper.storage.index.Snap;
@@ -51,6 +55,10 @@ public class RailwayHopper extends GraphHopper {
             "metro", Set.of(RailwayClass.SUBWAY),
             "tram", Set.of(RailwayClass.TRAM, RailwayClass.LIGHT_RAIL)
     );
+
+    /** Railway classes exempt from prepare.min_network_size, see cleanUp. */
+    private static final Set<RailwayClass> ALWAYS_SNAPPABLE_CLASSES = Set.of(
+            RailwayClass.FUNICULAR, RailwayClass.MONORAIL, RailwayClass.MINIATURE, RailwayClass.PRESERVED);
 
     /** Upper bound on the number of retry routing calls per waypoint, to cap worst-case latency. */
     private int maxSnapAttempts = 8;
@@ -103,6 +111,31 @@ public class RailwayHopper extends GraphHopper {
 
     public void setSoftWaypointRadius(double softWaypointRadius) {
         this.softWaypointRadius = softWaypointRadius;
+    }
+
+    /**
+     * Keeps funiculars, monorails and the like snappable although prepare.min_network_size marks
+     * them as stub subnetworks: they are short and usually isolated (a funicular is often a single
+     * edge), unlike the digitization stubs that setting is meant to hide. Profiles that shouldn't
+     * use them give them a weight of 0, which already keeps snapping off them.
+     */
+    @Override
+    protected void cleanUp() {
+        super.cleanUp();
+        EnumEncodedValue<RailwayClass> classEnc = getEncodingManager()
+                .getEnumEncodedValue(RailwayClass.KEY, RailwayClass.class);
+        List<BooleanEncodedValue> subnetworkEncs = new ArrayList<>();
+        for (Profile profile : getProfiles()) {
+            subnetworkEncs.add(getEncodingManager().getBooleanEncodedValue(Subnetwork.key(profile.getName())));
+        }
+        AllEdgesIterator edge = getBaseGraph().getAllEdges();
+        while (edge.next()) {
+            if (ALWAYS_SNAPPABLE_CLASSES.contains(edge.get(classEnc))) {
+                for (BooleanEncodedValue subnetworkEnc : subnetworkEncs) {
+                    edge.set(subnetworkEnc, false);
+                }
+            }
+        }
     }
 
     /**

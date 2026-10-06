@@ -55,4 +55,14 @@ public class RailAccessParserTest {
         way.setTag("railway", "rail");
         assertEquals(WayAccess.WAY, e.getAccess(way));
     }
+
+    @Test
+    public void testAcceptsSpecialTracks() {
+        RailAccessParser e = createAccessParser(createEncodingManager(), new PMap());
+        ReaderWay way = new ReaderWay(1);
+        for (String railway : new String[] {"funicular", "monorail", "miniature", "preserved"}) {
+            way.setTag("railway", railway);
+            assertEquals(WayAccess.WAY, e.getAccess(way), railway);
+        }
+    }
 }
