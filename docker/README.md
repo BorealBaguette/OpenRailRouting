@@ -98,3 +98,41 @@ If you'd rather provide your own filtered `.osm.pbf` (e.g. a custom bounding box
 3. Run `make refresh` (or `docker compose up` directly) to build and start the stack
 
 Go to http://localhost:8989 to try the routing.
+## Profiles and filters
+
+Profiles: `all`, `train`, `metro`, `tram` (see `config.yml` and `custom_models/`). Funicular,
+monorail, miniature and preserved lines are only routable on `all`.
+
+`train` requests can add filters on top of the profile. Pass `"ch.disable": true` and a
+`custom_model` whose rules only lower priorities (`multiply_by` ≤ 1); the request is then served
+with landmarks (LM) instead of CH, which is somewhat slower. Without a `custom_model`, requests
+keep using CH. A `custom_model` without `ch.disable` is rejected, as is one on another profile.
+
+```json
+{
+  "profile": "train",
+  "points": [[2.3744, 48.8443], [5.3806, 43.3027]],
+  "ch.disable": true,
+  "custom_model": {
+    "priority": [
+      { "if": "max_speed > 200", "multiply_by": "0" },
+      { "if": "electrified == NO", "multiply_by": "0" },
+      { "if": "gauge != 0 && gauge != 1435", "multiply_by": "0" }
+    ]
+  }
+}
+```
+
+Values available in conditions:
+
+| Value | Meaning |
+|---|---|
+| `highspeed` | `highspeed=yes` (true/false) |
+| `electrified` | `CONTACT_LINE`, `RAIL`, `NO`, `OTHER`, or `UNSET` when untagged |
+| `voltage`, `frequency` | e.g. `voltage >= 24000 && voltage <= 26000 && frequency >= 47.5`; `0` when untagged/DC |
+| `gauge` | in mm, `0` when untagged |
+| `max_speed` | the track's `maxspeed` in km/h (up to 510), `0` when untagged, e.g. `max_speed > 200` |
+| `railway_class`, `railway_service` | see `custom_models/` for examples |
+
+Untagged lines (`UNSET`, `0`) pass filters written as above. Exclude them explicitly for a strict
+filter, at the risk of breaking routes over poorly tagged track.

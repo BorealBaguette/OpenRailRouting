@@ -1,6 +1,7 @@
 package de.geofabrik.railway_routing;
 
 import com.graphhopper.routing.ev.BikeNetwork;
+import com.graphhopper.routing.ev.DecimalEncodedValue;
 import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
 import com.graphhopper.routing.ev.FerrySpeed;
 import com.graphhopper.routing.ev.ImportRegistry;
@@ -17,7 +18,6 @@ import com.graphhopper.routing.ev.VehicleSpeed;
 import com.graphhopper.routing.util.FerrySpeedCalculator;
 import com.graphhopper.routing.util.PriorityCode;
 import com.graphhopper.routing.util.parsers.BikePriorityParser;
-import com.graphhopper.routing.util.parsers.OSMMaxSpeedParser;
 import com.graphhopper.routing.util.parsers.OSMRoadClassLinkParser;
 import com.graphhopper.routing.util.parsers.OSMRoadClassParser;
 import com.graphhopper.routing.util.parsers.OSMRoadEnvironmentParser;
@@ -27,6 +27,7 @@ import com.graphhopper.routing.util.parsers.OSMWayIDParser;
 import de.geofabrik.railway_routing.ev.Electrified;
 import de.geofabrik.railway_routing.ev.Frequency;
 import de.geofabrik.railway_routing.ev.Gauge;
+import de.geofabrik.railway_routing.ev.Highspeed;
 import de.geofabrik.railway_routing.ev.PreferredDirection;
 import de.geofabrik.railway_routing.ev.RailwayClass;
 import de.geofabrik.railway_routing.ev.RailwayService;
@@ -34,7 +35,9 @@ import de.geofabrik.railway_routing.ev.Voltage;
 import de.geofabrik.railway_routing.parsers.OSMElectrifiedParser;
 import de.geofabrik.railway_routing.parsers.OSMFrequencyParser;
 import de.geofabrik.railway_routing.parsers.OSMGaugeParser;
+import de.geofabrik.railway_routing.parsers.OSMHighspeedParser;
 import de.geofabrik.railway_routing.parsers.OSMPreferredDirectionParser;
+import de.geofabrik.railway_routing.parsers.OSMRailMaxSpeedParser;
 import de.geofabrik.railway_routing.parsers.OSMRailwayClassParser;
 import de.geofabrik.railway_routing.parsers.OSMRailwayServiceParser;
 import de.geofabrik.railway_routing.parsers.OSMVoltageParser;
@@ -44,6 +47,14 @@ import de.geofabrik.railway_routing.parsers.RailAverageSpeedParser;
 public class RailImportRegistry implements ImportRegistry {
 
     public RailImportRegistry() {
+    }
+
+    /**
+     * max_speed with room for high-speed lines: 0-510 km/h in 2 km/h steps, both directions.
+     * GraphHopper's MaxSpeed.create() tops out at 150 km/h.
+     */
+    public static DecimalEncodedValue createMaxSpeed() {
+        return new DecimalEncodedValueImpl(MaxSpeed.KEY, 8, 0, 2, false, true, false);
     }
 
     @Override
@@ -69,8 +80,8 @@ public class RailImportRegistry implements ImportRegistry {
                             lookup.getBooleanEncodedValue(RoadClassLink.KEY))
             );
         else if (MaxSpeed.KEY.equals(name))
-            return ImportUnit.create(name, props -> MaxSpeed.create(),
-                    (lookup, props) -> new OSMMaxSpeedParser(
+            return ImportUnit.create(name, props -> createMaxSpeed(),
+                    (lookup, props) -> new OSMRailMaxSpeedParser(
                             lookup.getDecimalEncodedValue(MaxSpeed.KEY))
             );
         else if (RailwayClass.KEY.equals(name))
@@ -107,6 +118,11 @@ public class RailImportRegistry implements ImportRegistry {
             return ImportUnit.create(name, props -> PreferredDirection.create(),
                     (lookup, props) -> new OSMPreferredDirectionParser(
                             lookup.getBooleanEncodedValue(PreferredDirection.KEY))
+            );
+        else if (Highspeed.KEY.equals(name))
+            return ImportUnit.create(name, props -> Highspeed.create(),
+                    (lookup, props) -> new OSMHighspeedParser(
+                            lookup.getBooleanEncodedValue(Highspeed.KEY))
             );
         else if (OSMWayID.KEY.equals(name))
             return ImportUnit.create(name, props -> OSMWayID.create(),

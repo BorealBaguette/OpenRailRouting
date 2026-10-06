@@ -75,8 +75,9 @@ graphhopper:
         u_turn_costs: 600
       custom_model_files: [all.json, preferred_direction.json]
     # Favour their named railway_class over others without hard-excluding them: OSM typing is
-    # blurry at the edges (tram-train, Wuppertal's railway=monorail Schwebebahn, etc.), so these
-    # softly discourage rather than forbid categories other than their own. See custom_models/.
+    # blurry at the edges (tram-train, light rail vs. metro, etc.), so these softly discourage
+    # rather than forbid categories other than their own. Funicular, monorail, miniature and
+    # preserved lines are the exception: they're only routable on `all`. See custom_models/.
     - name: train
       turn_costs:
         vehicle_types: [train, tram, light_rail, subway]
@@ -118,7 +119,16 @@ graphhopper:
   # profile for which an LM profile exists. Important: This only will give correct routing results if the weights
   # calculated for the profile are equal or larger (for every edge) than those calculated for the profile that was used
   # for the preparation (`my_other_profile`)
-  profiles_lm: []
+  #
+  # The LM preparation below lets a train request add its own filters on top of the profile:
+  # send `"ch.disable": true` and a `custom_model` that only lowers priorities (e.g.
+  # `{"if": "electrified == NO", "multiply_by": "0"}`, or `gauge`, `voltage`, `highspeed`), and
+  # the router uses landmarks for that request instead of CH. Requests without a custom_model
+  # keep using CH. Filters can only make edges more expensive, which is exactly what landmarks
+  # need to stay correct. Metro/tram networks don't mix gauges, electrification or speed classes,
+  # so they get no LM preparation and a custom_model on them is rejected.
+  profiles_lm:
+    - profile: train
 
 
   #### Encoded Values ####
@@ -133,7 +143,7 @@ graphhopper:
   # which silently truncates the average-speed estimate for LGV/high-speed lines (up to 320 km/h)
   # even though the real OSM maxspeed tag is read correctly - the encoded value just can't store
   # the result. Widened here to speed_bits=8/speed_factor=2 (~510 km/h max, 2 km/h precision).
-  graph.encoded_values: gauge,voltage,electrified,frequency,road_environment,max_speed,rail_access,rail_average_speed|speed_bits=8|speed_factor=2,railway_class,railway_service,preferred_direction
+  graph.encoded_values: gauge,voltage,electrified,frequency,road_environment,max_speed,rail_access,rail_average_speed|speed_bits=8|speed_factor=2,railway_class,railway_service,preferred_direction,highspeed
 
   #### Speed, hybrid and flexible mode ####
 
