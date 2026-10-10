@@ -82,6 +82,9 @@ public class RailwayHopper extends GraphHopper {
     private static final int MAX_COMBINATIONS_PER_PAIR = 200;
     private static final int MIN_COMBINATIONS_PER_PAIR = 4;
     private static final double DUPLICATE_SNAP_DISTANCE = 2.0;
+    /** Weight added per meter a soft waypoint's candidate lies beyond its nearest candidate, as
+     *  if walked (a route weight is about seconds), see resolveSoftWaypoints. */
+    private static final double CANDIDATE_OFFSET_WEIGHT_PER_METER = 1.0;
 
     enum WaypointMode {
         /** Snap exactly to the nearest edge; never nudged, moved or substituted. */
@@ -246,8 +249,20 @@ public class RailwayHopper extends GraphHopper {
             }
         }
 
+        // A farther candidate costs the way to it: else another line within preference_radius
+        // wins whenever it shortens the trip (Oslo Jernbanetorget: a soft start jumped 180 m to
+        // the trams in Storgata, cutting 130 m off the way north-east).
+        double[][] offsets = new double[count][];
+        for (int i = 0; i < count; i++) {
+            GHPoint raw = rawPoints.get(i);
+            List<GHPoint> own = candidates.get(i);
+            double nearest = own.stream().mapToDouble(c -> distance(raw, c)).min().orElse(0);
+            offsets[i] = own.stream()
+                    .mapToDouble(c -> (distance(raw, c) - nearest) * CANDIDATE_OFFSET_WEIGHT_PER_METER).toArray();
+        }
+
         // cost[c]: cheapest chain from the first waypoint to candidate c of the current one
-        double[] cost = new double[candidates.get(0).size()];
+        double[] cost = offsets[0].clone();
         int[][] cameFrom = new int[count][];
         for (int i = 1; i < count; i++) {
             List<GHPoint> from = candidates.get(i - 1);
@@ -260,7 +275,7 @@ public class RailwayHopper extends GraphHopper {
                     if (cost[a] == Double.POSITIVE_INFINITY) {
                         continue;
                     }
-                    double total = cost[a] + legWeight(ctx, from.get(a), to.get(b));
+                    double total = cost[a] + legWeight(ctx, from.get(a), to.get(b)) + offsets[i][b];
                     // strictly cheaper only: ties keep the earlier candidate, i.e. the current snap
                     if (total < next[b]) {
                         next[b] = total;
